@@ -8,7 +8,7 @@ From the repository root:
 
     .\scripts\play-rx6600-16gb.ps1 -Exe 'D:\GameBackup1\Game\game_scarlett_master.exe'
 
-The profile defaults to --console series-s. To compare the larger memory budget, pass -Console series-x. Add -DryRun to print effective settings without launching the game.
+The profile defaults to --console series-x. To test the smaller memory budget separately, pass -Console series-s. Series X is the baseline because Series S produced visual corruption in gameplay. Add -DryRun to print effective settings without launching the game.
 
 ## Current launcher settings
 
@@ -17,7 +17,7 @@ The profile defaults to --console series-s. To compare the larger memory budget,
 - VICTORY_CARD_BUFFERS_MIN_MB=64 and VICTORY_CARD_BUFFERS_MB=128: conservative card-buffer limits.
 - Texture mip reduction and on-demand tiled residency are disabled by default until separately tested.
 
-Series S is the default because its advertised memory budget is materially smaller. This changes the emulated console budget and display profile; it is not a free optimization.
+Series X is the default for rendering compatibility. Series S remains an optional memory experiment, but is not currently validated for gameplay. This changes the emulated console budget and display profile; it is not a free optimization.
 
 ## Measurements
 
