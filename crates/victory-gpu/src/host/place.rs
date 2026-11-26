@@ -214,6 +214,12 @@ impl HostList {
             None => return false,
         };
         let at = to.offset(dst as u64);
+        // A previous placed copy to this same shadow left it shader-readable.
+        // The first copy can promote a COMMON buffer to COPY_DEST implicitly.
+        let placed_before = self.deferred().copies.iter().any(|step| {
+            matches!(step, Step::Placed(p) if std::sync::Arc::ptr_eq(&p.shadow, &to))
+        });
+
         // What the title's CPU wrote around and under it so far goes first.
         to.refresh(self, dst as u64, len as u64);
         // SAFETY (both): an open list; live buffers (the list holds the
@@ -228,18 +234,33 @@ impl HostList {
                         return false;
                     };
                     unsafe {
+                        if placed_before {
+                            self.list.ResourceBarrier(&[transition(&to.buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE)]);
+                        }
                         self.list.CopyBufferRegion(&between, 0, &from.buffer, offset, len as u64);
                         self.list.ResourceBarrier(&[transition(&between, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE)]);
                         wait_for_all(host, &self.list);
+                        self.list.ResourceBarrier(&[transition(&to.buffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST)]);
                         self.list.CopyBufferRegion(&to.buffer, at, &between, 0, len as u64);
+                        self.list.ResourceBarrier(&[transition(&to.buffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)]);
                     }
                 } else {
-                    unsafe { self.list.CopyBufferRegion(&to.buffer, at, &from.buffer, offset, len as u64) };
+                    unsafe {
+                        if placed_before {
+                            self.list.ResourceBarrier(&[transition(&to.buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST)]);
+                        }
+                        self.list.CopyBufferRegion(&to.buffer, at, &from.buffer, offset, len as u64);
+                        self.list.ResourceBarrier(&[transition(&to.buffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)]);
+                    }
                 }
                 STATS[2].fetch_add(1, Ordering::Relaxed);
             }
             (None, Some((from, offset, _))) => unsafe {
+                if placed_before {
+                    self.list.ResourceBarrier(&[transition(&to.buffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST)]);
+                }
                 self.list.CopyBufferRegion(&to.buffer, at, from, *offset, len as u64);
+                self.list.ResourceBarrier(&[transition(&to.buffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)]);
             },
             (None, None) => return false,
         }

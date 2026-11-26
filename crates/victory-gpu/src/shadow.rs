@@ -5033,23 +5033,30 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
 /// [`window`] cuts the windows of asks that give a length on a finer grid.
 const WINDOW: u64 = 4 << 20;
 
-/// The grid the windows of asks with a length are cut on, in bytes: 4 MiB
-/// unless `VICTORY_WINDOW_KB` names a smaller power of two (64 at least).
-/// A window is the PC's memory, all of it, however little of it is read:
-/// 803 windows held 3.3 GB in run 60's gameplay, and all that was ever
-/// asked for in them lay within 1.6 GB. On a grid of 1 MiB or 256 KiB a
-/// window ends nearer to what is read. An ask without a length keeps the
-/// 4 MiB grid whatever is set: a root view reads from its address to its
-/// window's end, and mesh streams bound that way reach megabytes.
-/// shortcut: the default stays 4 MiB until a run with the memory line's
-/// window counts has shown what the finer grids give; the same memory
-/// asked for with different ranges then lies in more than one window.
+/// Whether the compact memory profile was requested. It is opt-in: the
+/// normal 4 MiB window grid remains unchanged for existing configurations.
+fn compact_memory() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("VICTORY_MEMORY_PROFILE")
+            .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "compact" | "16gb" | "low"))
+    })
+}
+
+/// The grid the windows of asks with a length are cut on, in bytes. The
+/// compact profile uses 1 MiB instead of 4 MiB; an explicit
+/// VICTORY_WINDOW_KB always wins. Smaller windows reduce unused host copies
+/// when many independent views touch different parts of title memory.
 fn window() -> u64 {
     static GRID: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *GRID.get_or_init(|| {
         let kb = std::env::var("VICTORY_WINDOW_KB").ok().and_then(|v| v.trim().parse::<u64>().ok());
-        grid(kb)
+        choose_window_grid(kb, compact_memory())
     })
+}
+
+fn choose_window_grid(kb: Option<u64>, compact: bool) -> u64 {
+    grid(kb.or_else(|| compact.then_some(1024)))
 }
 
 /// The window grid in bytes for a setting in KiB: a power of two from
@@ -5077,16 +5084,21 @@ fn window_of(address: u64, end: u64, grid: u64) -> (u64, u64) {
 /// window is the cell's tail from the ask's step on ([`TAIL_STEP`]); an ask
 /// lower in the cell later makes a longer tail, which every ask from then
 /// on takes, and the shorter one goes when nothing holds it any more.
-/// shortcut: off unless `VICTORY_WINDOW_TAILS=1`. A longer tail is another
-/// host buffer than the shorter one: what was bound to the shorter stays
-/// right only because every list brings up to date the copy it bound
-/// (`draw.rs` keeps a root view's copy with its slot). It pays only
-/// together with `VICTORY_WINDOW_KB` below 4096: on the 4 MiB grid an ask
-/// with a length in the same cell makes the whole cell's window, and the
-/// tail is that.
+/// shortcut: off normally; the compact memory profile enables it when the
+/// window grid is finer than 4 MiB, unless VICTORY_WINDOW_TAILS overrides
+/// it. A longer tail is another host buffer than the shorter one: what was
+/// bound to the shorter stays right because every list brings up to date the
+/// copy it bound (draw.rs keeps a root view's copy with its slot).
 fn tails() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_WINDOW_TAILS").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| {
+        let explicit = std::env::var("VICTORY_WINDOW_TAILS").ok().map(|v| v.trim() == "1");
+        choose_tails(explicit, compact_memory(), window())
+    })
+}
+
+fn choose_tails(explicit: Option<bool>, compact: bool, grid: u64) -> bool {
+    explicit.unwrap_or(compact && grid < WINDOW)
 }
 
 /// Tails begin on multiples of this. A longer tail is a new host buffer,
@@ -5419,7 +5431,7 @@ pub(crate) fn exact_line(frames: f64) {
 #[cfg(test)]
 mod window_tests {
     use super::{
-        WINDOW, cover, default_card_limits_mb, grid, holder, longest_tail, resolve_card_limits,
+        WINDOW, choose_tails, choose_window_grid, cover, default_card_limits_mb, grid, holder, longest_tail, resolve_card_limits,
         tail_of, window_of,
     };
 
@@ -5536,6 +5548,18 @@ mod window_tests {
         }
     }
 
+    /// The compact profile chooses a smaller grid and enables root-view
+    /// tails, while explicit settings retain priority.
+    #[test]
+    fn compact_profile_uses_memory_sized_windows() {
+        assert_eq!(choose_window_grid(None, false), WINDOW);
+        assert_eq!(choose_window_grid(None, true), 1 << 20);
+        assert_eq!(choose_window_grid(Some(256), true), 256 << 10);
+        assert!(!choose_tails(None, false, WINDOW));
+        assert!(choose_tails(None, true, 1 << 20));
+        assert!(!choose_tails(Some(false), true, 1 << 20));
+        assert!(choose_tails(Some(true), false, WINDOW));
+    }
     /// A window holds its ask and is cut on the grid; on the default grid
     /// it is the window there always was.
     #[test]

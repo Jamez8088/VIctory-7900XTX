@@ -10,6 +10,8 @@ param(
     [switch]$Safe,
     [switch]$RayTracing,
     [ValidateSet('diag', 'release')][string]$Build = 'diag',
+    [ValidateSet('series-x', 'series-s')][string]$Console = 'series-x',
+    [switch]$DryRun,
     [hashtable]$More = @{}
 )
 $settings = @{
@@ -33,6 +35,8 @@ if (-not (Test-Path $Exe)) { Write-Host "No $Exe."; return }
 $paths = 'VICTORY_CONFIG', 'VICTORY_GAME_DIR', 'VICTORY_CACHE_DIR', 'VICTORY_DATA_DIR'
 Get-ChildItem Env:VICTORY_* | Where-Object { $_.Name -notin $paths } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
 foreach ($k in $settings.Keys) { Set-Item "Env:$k" $settings[$k] }
+Write-Host "Victory profile: console=$Console; memory=$env:VICTORY_MEMORY_PROFILE; drop_mips=$env:VICTORY_TEXTURE_DROP_MIPS; on_demand=$env:VICTORY_LEVELS_ON_DEMAND; texture_pool=$env:VICTORY_TEXTURE_POOL"
+if ($DryRun) { return }
 $Exe = (Resolve-Path $Exe).Path
 Push-Location (Join-Path $PSScriptRoot '..')   # victory.toml is looked for here
-try { & $victory run $Exe --execute } finally { Pop-Location }
+try { & $victory run $Exe --console $Console --execute } finally { Pop-Location }
